@@ -14,13 +14,17 @@ const PAPER_SIZES = ["A4","A3","B4","B5"];
 const DAYS = ["일","월","화","수","목","금","토"];
 const ADMIN_PW = "admin1234";
 
-const today = () => new Date().toISOString().split("T")[0];
+const today = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+};
 const diffDays = (a, b) => Math.ceil((new Date(b) - new Date(a)) / 86400000);
 const formatDate = (d) => d ? d.replace(/-/g, ".") : "-";
 const getYM = (d) => d ? d.slice(0, 7) : "";
 const getDayLabel = (dateStr) => {
   if (!dateStr) return "";
-  const d = new Date(dateStr + "T00:00:00");
+  const [y, m, day] = dateStr.split("-").map(Number);
+  const d = new Date(y, m - 1, day);
   return `(${DAYS[d.getDay()]})`;
 };
 const TIME_OPTIONS = Array.from({ length: 48 }, (_, i) => {
@@ -29,9 +33,9 @@ const TIME_OPTIONS = Array.from({ length: 48 }, (_, i) => {
   return `${h}:${m}`;
 });
 const getPrevDate = (dateStr) => {
-  const d = new Date(dateStr + "T00:00:00");
-  d.setDate(d.getDate() - 1);
-  return d.toISOString().split("T")[0];
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(y, m - 1, d - 1);
+  return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;
 };
 
 const calcSheets = (pages, copies, isDuplex) => {
