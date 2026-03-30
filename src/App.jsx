@@ -380,6 +380,7 @@ function FormView({ teachers, form, setForm, editId, onSave, onCancel, allReques
 function ListView({ requests, teachers, alerts, filterTeacher, setFilterTeacher, filterSubject, setFilterSubject, search, setSearch, togglePrinted, deleteReq, setForm, setEditId, setView }) {
   const [sortCol, setSortCol] = useState("requestDate");
   const [sortDir, setSortDir] = useState("desc");
+  const [statusTab, setStatusTab] = useState("active");
 
   const handleSort = (col) => {
     if (sortCol === col) setSortDir(d => d === "asc" ? "desc" : "asc");
@@ -393,7 +394,14 @@ function ListView({ requests, teachers, alerts, filterTeacher, setFilterTeacher,
   const subjectsFor = (tid) => tid === "전체" ? [] : [...new Set(requests.filter(r => r.teacherId === tid && r.subject).map(r => r.subject))].sort();
   const availableSubs = subjectsFor(filterTeacher);
 
+  const isCompleted = (r) => r.printed && r.deliveredDate;
+
   const filtered = requests
+    .filter(r => {
+      if (statusTab === "active") return !isCompleted(r);
+      if (statusTab === "done") return isCompleted(r);
+      return true;
+    })
     .filter(r => filterTeacher === "전체" || r.teacherId === filterTeacher)
     .filter(r => filterSubject === "전체" || r.subject === filterSubject)
     .filter(r => !search || r.title.includes(search) || r.teacherName.includes(search) || (r.subject || "").includes(search));
@@ -407,6 +415,11 @@ function ListView({ requests, teachers, alerts, filterTeacher, setFilterTeacher,
   });
 
   const sortedFiltered = [...filtered].sort((a, b) => {
+    // 전체 탭에서만 완료 건은 항상 아래로
+    if (statusTab === "all") {
+      const ac = isCompleted(a), bc = isCompleted(b);
+      if (ac !== bc) return ac ? 1 : -1;
+    }
     if (sortCol === "copies") {
       return sortDir === "asc" ? (Number(a.copies)||0) - (Number(b.copies)||0) : (Number(b.copies)||0) - (Number(a.copies)||0);
     }
@@ -417,8 +430,8 @@ function ListView({ requests, teachers, alerts, filterTeacher, setFilterTeacher,
     if (sortCol === "dueDate") {
       const ad = a.dueDate || "9999-99-99", bd = b.dueDate || "9999-99-99";
       if (ad !== bd) return sortDir === "asc" ? ad.localeCompare(bd) : bd.localeCompare(ad);
-      const ac = CLASS_ORDER[a.dueClass] || 99, bc = CLASS_ORDER[b.dueClass] || 99;
-      return sortDir === "asc" ? ac - bc : bc - ac;
+      const ac2 = CLASS_ORDER[a.dueClass] || 99, bc2 = CLASS_ORDER[b.dueClass] || 99;
+      return sortDir === "asc" ? ac2 - bc2 : bc2 - ac2;
     }
     let av = "", bv = "";
     if (sortCol === "teacherName") { av = a.teacherName; bv = b.teacherName; }
@@ -429,7 +442,9 @@ function ListView({ requests, teachers, alerts, filterTeacher, setFilterTeacher,
     return 0;
   });
 
-  const total = requests.length, done = requests.filter(r => r.printed && r.deliveredDate).length;
+  const total = requests.length;
+  const done = requests.filter(r => r.printed && r.deliveredDate).length;
+  const active = total - done;
 
   const SortBtn = ({ col, label }) => (
     <button onClick={() => handleSort(col)} style={{
@@ -441,12 +456,25 @@ function ListView({ requests, teachers, alerts, filterTeacher, setFilterTeacher,
 
   return (
     <>
-      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-        {[["전체", total, "#dbeafe"], ["완료", done, "#dcfce7"], ["미처리", total - done, "#fef9c3"], ["마감임박", alerts.length, alerts.length > 0 ? "#fee2e2" : "#f1f5f9"]].map(([l, n, c]) => (
+      {/* 상단 요약 카드 */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        {[["진행중", active, "#fef9c3"], ["완료", done, "#dcfce7"], ["무한기", total, "#dbeafe"], ["마감임박", alerts.length, alerts.length > 0 ? "#fee2e2" : "#f1f5f9"]].map(([l, n, c]) => (
           <div key={l} style={{ background: c, borderRadius: 10, padding: "10px 14px", flex: 1, minWidth: 70, textAlign: "center" }}>
             <div style={{ fontSize: 20, fontWeight: 800, color: l === "마감임박" && alerts.length > 0 ? "#dc2626" : "#1e293b" }}>{n}</div>
             <div style={{ fontSize: 11, color: "#475569" }}>{l}</div>
           </div>
+        ))}
+      </div>
+
+      {/* 진행중/전체/처리완료 탭 */}
+      <div style={{ display: "flex", borderBottom: "1px solid #e2e8f0", marginBottom: 12 }}>
+        {[["active", "활성 진행중 ▶ " + active + "건"], ["all", "활성 전체 " + total + "건"], ["done", "✓ 처리완료 " + done + "건"]].map(([key, label]) => (
+          <button key={key} onClick={() => setStatusTab(key)}
+            style={{ padding: "9px 16px", cursor: "pointer", fontWeight: 600, fontSize: 13, background: "none", border: "none",
+              color: statusTab === key ? (key === "done" ? "#22c55e" : "#1e40af") : "#64748b",
+              borderBottom: statusTab === key ? `2px solid ${key === "done" ? "#22c55e" : "#1e40af"}` : "2px solid transparent" }}>
+            {label}
+          </button>
         ))}
       </div>
 
@@ -533,7 +561,11 @@ function ListView({ requests, teachers, alerts, filterTeacher, setFilterTeacher,
                 {item.memo && <span style={{ fontSize: 12, color: "#94a3b8" }}>💬 {item.memo}</span>}
               </div>
               <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                <button style={C.btnOutSm(item.printed ? "#22c55e" : "#f59e0b")} onClick={() => togglePrinted(item)}>
+                <button
+                  style={item.printed
+                    ? { background: "#22c55e", color: "#fff", border: "none", borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700 }
+                    : C.btnOutSm("#f59e0b")}
+                  onClick={() => togglePrinted(item)}>
                   {item.printed ? "✓ 출력완료" : "출력전"}
                 </button>
                 <button style={C.btnOutSm("#3b82f6")} onClick={() => { setForm({ ...item }); setEditId(item.id); setView("form"); }}>수정</button>
