@@ -834,7 +834,7 @@ function DailyStatsTab({ requests, copierCounters, onSaveCounter, onSaveAllCount
                   const sum123 = machineData.slice(0, 3).reduce((s, m) => s + (m.diff || 0), 0);
                   const dayReqsForDate = requests.filter(r => r.requestDate === d && r.printed);
                   const expectedForDate = dayReqsForDate.reduce((s, r) => s + calcCounter(r.pages, r.copies), 0);
-                  const waste = sum123 > 0 && expectedForDate > 0 ? sum123 - expectedForDate : null;
+                  const waste = sum123 > 0 ? sum123 - expectedForDate : null;
                   const hasData = machineData.some(m => m.counter !== null);
 
                   return (
