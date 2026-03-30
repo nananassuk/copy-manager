@@ -8,28 +8,39 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const ROUTES = ["네이버 밴드", "직접 전달", "기타"];
 const DELIVERY_METHODS = ["직접 전달", "우편함", "학급 배부", "기타"];
-const CLASSES = ["1교시", "2교시", "3교시", "4교시", "5교시", "6교시", "7교시", "8교시", "9교시", "야간수업"];
-const CLASS_ORDER = { "1교시": 1, "2교시": 2, "3교시": 3, "4교시": 4, "5교시": 5, "6교시": 6, "7교시": 7, "8교시": 8, "9교시": 9, "야간수업": 10 };
-const DAYS = ["일", "월", "화", "수", "목", "금", "토"];
+const CLASSES = ["1교시","2교시","3교시","4교시","5교시","6교시","7교시","8교시","9교시","야간수업"];
+const CLASS_ORDER = {"1교시":1,"2교시":2,"3교시":3,"4교시":4,"5교시":5,"6교시":6,"7교시":7,"8교시":8,"9교시":9,"야간수업":10};
+const PAPER_SIZES = ["A4","A3","B4","B5"];
+const DAYS = ["일","월","화","수","목","금","토"];
 const ADMIN_PW = "admin1234";
 
 const today = () => new Date().toISOString().split("T")[0];
 const diffDays = (a, b) => Math.ceil((new Date(b) - new Date(a)) / 86400000);
 const formatDate = (d) => d ? d.replace(/-/g, ".") : "-";
 const getYM = (d) => d ? d.slice(0, 7) : "";
-
-// 30분 단위 시간 옵션 생성 (00:00 ~ 23:30)
+const getDayLabel = (dateStr) => {
+  if (!dateStr) return "";
+  const d = new Date(dateStr + "T00:00:00");
+  return `(${DAYS[d.getDay()]})`;
+};
 const TIME_OPTIONS = Array.from({ length: 48 }, (_, i) => {
   const h = String(Math.floor(i / 2)).padStart(2, "0");
   const m = i % 2 === 0 ? "00" : "30";
   return `${h}:${m}`;
 });
-
-// 날짜 → 요일
-const getDayLabel = (dateStr) => {
-  if (!dateStr) return "";
+const getPrevDate = (dateStr) => {
   const d = new Date(dateStr + "T00:00:00");
-  return `(${DAYS[d.getDay()]})`; 
+  d.setDate(d.getDate() - 1);
+  return d.toISOString().split("T")[0];
+};
+
+const calcSheets = (pages, copies, isDuplex) => {
+  if (!pages || !copies) return 0;
+  return isDuplex ? Math.ceil(Number(pages) / 2) * Number(copies) : Number(pages) * Number(copies);
+};
+const calcCounter = (pages, copies) => {
+  if (!pages || !copies) return 0;
+  return Number(pages) * Number(copies);
 };
 
 const statusBadge = (item) => {
@@ -43,7 +54,9 @@ const emptyForm = () => ({
   requestDate: today(), requestTime: "09:00",
   title: "", route: "네이버 밴드", receiver: "",
   dueDate: "", dueClass: "",
-  printed: false, printedBy: "", copies: "", deliveredDate: "", deliveryMethod: "", memo: "",
+  paperSize: "A4", isDuplex: false, pages: "", copies: "",
+  printed: false, printedBy: "",
+  deliveredDate: "", deliveryMethod: "", memo: "",
 });
 
 const toSupabase = (r) => ({
@@ -59,6 +72,9 @@ const toSupabase = (r) => ({
   is_printed: r.printed || false,
   print_handler: r.printedBy || null,
   copies: r.copies !== "" && r.copies != null ? Number(r.copies) : null,
+  paper_size: r.paperSize || null,
+  is_duplex: r.isDuplex || false,
+  pages: r.pages !== "" && r.pages != null ? Number(r.pages) : null,
   delivery_date: r.deliveredDate || null,
   delivery_method: r.deliveryMethod || null,
   memo: r.memo || null,
@@ -66,16 +82,14 @@ const toSupabase = (r) => ({
 
 const fromSupabase = (r) => {
   const rdParts = (r.request_date || "").split(" ");
-  const requestDate = rdParts[0] || "";
-  const requestTime = rdParts[1] || "00:00";
   return {
     id: r.id,
     teacherId: r.teacher_id || "",
     teacherName: r.teacher_name || "",
     subject: r.subject || "",
     title: r.title || "",
-    requestDate,
-    requestTime,
+    requestDate: rdParts[0] || "",
+    requestTime: rdParts[1] || "00:00",
     dueDate: r.due_date || "",
     dueClass: r.due_class || "",
     route: r.route || "네이버 밴드",
@@ -83,6 +97,9 @@ const fromSupabase = (r) => {
     printed: r.is_printed || false,
     printedBy: r.print_handler || "",
     copies: r.copies != null ? String(r.copies) : "",
+    paperSize: r.paper_size || "A4",
+    isDuplex: r.is_duplex || false,
+    pages: r.pages != null ? String(r.pages) : "",
     deliveredDate: r.delivery_date || "",
     deliveryMethod: r.delivery_method || "",
     memo: r.memo || "",
@@ -112,7 +129,6 @@ function TeacherSearch({ teachers, value, onChange }) {
   const results = query.length > 0 ? teachers.filter(t => t.name.includes(query)) : teachers;
   useEffect(() => { setQuery(value?.name || ""); }, [value]);
   const select = (t) => { onChange(t); setQuery(t.name); setOpen(false); };
-
   const handleBlur = () => {
     setTimeout(() => {
       const exact = teachers.find(t => t.name === query.trim());
@@ -121,19 +137,15 @@ function TeacherSearch({ teachers, value, onChange }) {
       setOpen(false);
     }, 150);
   };
-
   const handleKeyDown = (e) => {
     if (e.key === "Enter" && results.length > 0) select(results[0]);
     if (e.key === "Escape") setOpen(false);
   };
-
   return (
     <div style={{ position: "relative" }}>
       <input style={C.input} value={query}
         onChange={e => { setQuery(e.target.value); onChange(null); setOpen(true); }}
-        onFocus={() => setOpen(true)}
-        onBlur={handleBlur}
-        onKeyDown={handleKeyDown}
+        onFocus={() => setOpen(true)} onBlur={handleBlur} onKeyDown={handleKeyDown}
         placeholder="이름 검색 후 엔터 or 클릭..." autoComplete="off" />
       {open && results.length > 0 && (
         <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1px solid #cbd5e1", borderRadius: 8, boxShadow: "0 4px 12px rgba(0,0,0,0.1)", zIndex: 100, maxHeight: 200, overflowY: "auto" }}>
@@ -141,16 +153,12 @@ function TeacherSearch({ teachers, value, onChange }) {
             <div key={t.id} onMouseDown={() => select(t)}
               style={{ padding: "9px 12px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid #f1f5f9" }}
               onMouseEnter={e => e.currentTarget.style.background = "#f1f5f9"}
-              onMouseLeave={e => e.currentTarget.style.background = ""}>
-              {t.name}
-            </div>
+              onMouseLeave={e => e.currentTarget.style.background = ""}>{t.name}</div>
           ))}
         </div>
       )}
       {open && query.length > 0 && results.length === 0 && (
-        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1px solid #cbd5e1", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "#94a3b8", zIndex: 100 }}>
-          검색 결과 없음
-        </div>
+        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1px solid #cbd5e1", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "#94a3b8", zIndex: 100 }}>검색 결과 없음</div>
       )}
     </div>
   );
@@ -197,8 +205,16 @@ function ExcelUploader({ teachers, onBulkAdd }) {
 }
 
 /* ── 요청 폼 ── */
-function FormView({ teachers, form, setForm, editId, onSave, onCancel }) {
+function FormView({ teachers, form, setForm, editId, onSave, onCancel, allRequests }) {
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const sheets = calcSheets(form.pages, form.copies, form.isDuplex);
+  const counter = calcCounter(form.pages, form.copies);
+
+  // 제목 유사 검색
+  const titleQuery = form.title.trim();
+  const similarTitles = titleQuery.length >= 2
+    ? allRequests.filter(r => r.id !== editId && r.title.includes(titleQuery))
+    : [];
 
   return (
     <>
@@ -214,13 +230,11 @@ function FormView({ teachers, form, setForm, editId, onSave, onCancel }) {
             onChange={t => setForm(f => ({ ...f, teacherId: t?.id || "", teacherName: t?.name || "" }))} />
           {!form.teacherId && form.teacherName && <div style={{ fontSize: 11, color: "#f59e0b", marginTop: 4 }}>목록에서 선택해주세요</div>}
         </div>
-
         {/* 과목 */}
         <div style={C.frow}>
           <label style={C.label}>과목</label>
           <input style={C.input} value={form.subject} onChange={e => set("subject", e.target.value)} placeholder="예: 수학, 국어" />
         </div>
-
         {/* 신청일시 */}
         <div style={C.frow}>
           <label style={C.label}>신청일시(접수일시) *</label>
@@ -231,28 +245,80 @@ function FormView({ teachers, form, setForm, editId, onSave, onCancel }) {
             </select>
           </div>
         </div>
-
-        {/* 완료 요청일 + 교시 */}
+        {/* 완료 요청일 */}
         <div style={C.frow}>
           <label style={C.label}>완료 요청일</label>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <input type="date" style={{ ...C.input, flex: 2 }} value={form.dueDate} onChange={e => set("dueDate", e.target.value)} />
-            {form.dueDate && (
-              <span style={{ fontSize: 14, fontWeight: 700, color: "#1e40af", whiteSpace: "nowrap" }}>
-                {getDayLabel(form.dueDate)}
-              </span>
-            )}
+            {form.dueDate && <span style={{ fontSize: 14, fontWeight: 700, color: "#1e40af", whiteSpace: "nowrap" }}>{getDayLabel(form.dueDate)}</span>}
             <select style={{ ...C.select, flex: 1 }} value={form.dueClass} onChange={e => set("dueClass", e.target.value)}>
               <option value="">교시 선택</option>
               {CLASSES.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
         </div>
-
-        {/* 제목 */}
+        {/* 제목 + 유사 요청 알림 */}
         <div style={C.frow}>
           <label style={C.label}>제목 / 내용 *</label>
-          <input style={C.input} value={form.title} onChange={e => set("title", e.target.value)} placeholder="예: 3학년 수학 시험지 30부" />
+          <input style={C.input} value={form.title} onChange={e => set("title", e.target.value)} placeholder="예: 3학년 수학 시험지" />
+          {similarTitles.length > 0 && (
+            <div style={{ marginTop: 6, padding: "8px 12px", background: "#fef3c7", border: "1px solid #fbbf24", borderRadius: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#92400e", marginBottom: 4 }}>⚠️ 유사한 제목의 요청이 {similarTitles.length}건 있어요!</div>
+              {similarTitles.slice(0, 3).map(r => (
+                <div key={r.id} style={{ fontSize: 11, color: "#78350f", padding: "2px 0" }}>
+                  • {r.teacherName} | {r.title} ({formatDate(r.requestDate)}) — {statusBadge(r).label}
+                </div>
+              ))}
+              {similarTitles.length > 3 && <div style={{ fontSize: 11, color: "#78350f" }}>외 {similarTitles.length - 3}건...</div>}
+            </div>
+          )}
+        </div>
+
+        {/* 출력 사양 */}
+        <div style={{ background: "#f8fafc", borderRadius: 10, padding: 14, marginBottom: 12, border: "1px solid #e2e8f0" }}>
+          <div style={{ fontWeight: 700, fontSize: 13, color: "#374151", marginBottom: 10 }}>📄 출력 사양</div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+            <div style={{ flex: 1 }}>
+              <label style={C.label}>규격</label>
+              <select style={{ ...C.select, width: "100%" }} value={form.paperSize} onChange={e => set("paperSize", e.target.value)}>
+                {PAPER_SIZES.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={C.label}>인쇄 방식</label>
+              <div style={{ display: "flex", gap: 4 }}>
+                {["단면", "양면"].map(v => (
+                  <button key={v} onClick={() => set("isDuplex", v === "양면")}
+                    style={{ flex: 1, padding: "7px 0", border: `1px solid ${(v === "양면") === form.isDuplex ? "#1e40af" : "#cbd5e1"}`,
+                      borderRadius: 8, background: (v === "양면") === form.isDuplex ? "#1e40af" : "#fff",
+                      color: (v === "양면") === form.isDuplex ? "#fff" : "#374151",
+                      cursor: "pointer", fontWeight: 600, fontSize: 13 }}>{v}</button>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+            <div style={{ flex: 1 }}>
+              <label style={C.label}>페이지 수</label>
+              <input type="number" min="1" style={C.input} value={form.pages} onChange={e => set("pages", e.target.value)} placeholder="예: 30" />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={C.label}>요청 부수</label>
+              <input type="number" min="1" style={C.input} value={form.copies} onChange={e => set("copies", e.target.value)} placeholder="예: 135" />
+            </div>
+          </div>
+          {form.pages && form.copies && (
+            <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ flex: 1, background: "#dbeafe", borderRadius: 8, padding: "10px", textAlign: "center" }}>
+                <div style={{ fontSize: 20, fontWeight: 800, color: "#1e40af" }}>{sheets.toLocaleString()}</div>
+                <div style={{ fontSize: 11, color: "#3b82f6", marginTop: 2 }}>용지매수</div>
+              </div>
+              <div style={{ flex: 1, background: "#ede9fe", borderRadius: 8, padding: "10px", textAlign: "center" }}>
+                <div style={{ fontSize: 20, fontWeight: 800, color: "#7c3aed" }}>{counter.toLocaleString()}</div>
+                <div style={{ fontSize: 11, color: "#7c3aed", marginTop: 2 }}>예상 카운터</div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* 신청 루트 */}
@@ -262,48 +328,44 @@ function FormView({ teachers, form, setForm, editId, onSave, onCancel }) {
             {ROUTES.map(r => <option key={r}>{r}</option>)}
           </select>
         </div>
-
         {/* 접수자 */}
         <div style={C.frow}>
           <label style={C.label}>접수자</label>
           <input style={C.input} value={form.receiver} onChange={e => set("receiver", e.target.value)} placeholder="이름 직접 입력" />
         </div>
-
         {/* 출력 완료 */}
         <div style={C.frow}>
           <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, cursor: "pointer" }}>
             <input type="checkbox" checked={form.printed} onChange={e => set("printed", e.target.checked)} />출력 완료
           </label>
         </div>
-
-        {form.printed && (<>
-          <div style={C.frow}>
-            <label style={C.label}>복사 담당자</label>
-            <input style={C.input} value={form.printedBy} onChange={e => set("printedBy", e.target.value)} placeholder="이름 직접 입력" />
+        {form.printed && (
+          <div style={{ background: "#f0fdf4", borderRadius: 10, padding: 14, marginBottom: 12, border: "1px solid #86efac" }}>
+            <div style={{ fontWeight: 700, fontSize: 13, color: "#166534", marginBottom: 10 }}>✅ 출력 완료 정보</div>
+            <div style={C.frow}>
+              <label style={C.label}>복사 담당자</label>
+              <input style={C.input} value={form.printedBy} onChange={e => set("printedBy", e.target.value)} placeholder="이름 직접 입력" />
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ flex: 1 }}>
+                <label style={C.label}>전달일자</label>
+                <input type="date" style={C.input} value={form.deliveredDate} onChange={e => set("deliveredDate", e.target.value)} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={C.label}>전달 방식</label>
+                <select style={{ ...C.select, width: "100%" }} value={form.deliveryMethod} onChange={e => set("deliveryMethod", e.target.value)}>
+                  <option value="">선택</option>
+                  {DELIVERY_METHODS.map(m => <option key={m}>{m}</option>)}
+                </select>
+              </div>
+            </div>
           </div>
-          <div style={C.frow}>
-            <label style={C.label}>출력 부수</label>
-            <input type="number" min="0" style={C.input} value={form.copies} onChange={e => set("copies", e.target.value)} placeholder="예: 150" />
-          </div>
-          <div style={C.frow}>
-            <label style={C.label}>전달일자</label>
-            <input type="date" style={C.input} value={form.deliveredDate} onChange={e => set("deliveredDate", e.target.value)} />
-          </div>
-          <div style={C.frow}>
-            <label style={C.label}>전달 방식</label>
-            <select style={C.select} value={form.deliveryMethod} onChange={e => set("deliveryMethod", e.target.value)}>
-              <option value="">선택</option>
-              {DELIVERY_METHODS.map(m => <option key={m}>{m}</option>)}
-            </select>
-          </div>
-        </>)}
-
+        )}
         {/* 메모 */}
         <div style={C.frow}>
           <label style={C.label}>메모</label>
           <input style={C.input} value={form.memo} onChange={e => set("memo", e.target.value)} placeholder="특이사항" />
         </div>
-
         <button style={C.btn()} onClick={onSave}>{editId ? "수정 완료" : "등록"}</button>
       </div>
     </>
@@ -332,17 +394,22 @@ function ListView({ requests, teachers, alerts, filterTeacher, setFilterTeacher,
     .filter(r => filterSubject === "전체" || r.subject === filterSubject)
     .filter(r => !search || r.title.includes(search) || r.teacherName.includes(search) || (r.subject || "").includes(search));
 
+  // 제목 중복 체크 (검색어가 있을 때 동일 제목 건수 표시)
+  const titleGroups = {};
+  requests.forEach(r => {
+    const k = r.title.trim();
+    if (!titleGroups[k]) titleGroups[k] = 0;
+    titleGroups[k]++;
+  });
+
   const sortedFiltered = [...filtered].sort((a, b) => {
     if (sortCol === "copies") {
-      const av = Number(a.copies) || 0, bv = Number(b.copies) || 0;
-      return sortDir === "asc" ? av - bv : bv - av;
+      return sortDir === "asc" ? (Number(a.copies)||0) - (Number(b.copies)||0) : (Number(b.copies)||0) - (Number(a.copies)||0);
     }
     if (sortCol === "status") {
       const order = { "미처리": 0, "출력완료": 1, "완료": 2 };
-      const sa = statusBadge(a).label, sb = statusBadge(b).label;
-      return sortDir === "asc" ? order[sa] - order[sb] : order[sb] - order[sa];
+      return sortDir === "asc" ? order[statusBadge(a).label] - order[statusBadge(b).label] : order[statusBadge(b).label] - order[statusBadge(a).label];
     }
-    // 요청마감일: 날짜 → 교시 순으로 정렬
     if (sortCol === "dueDate") {
       const ad = a.dueDate || "9999-99-99", bd = b.dueDate || "9999-99-99";
       if (ad !== bd) return sortDir === "asc" ? ad.localeCompare(bd) : bd.localeCompare(ad);
@@ -352,10 +419,7 @@ function ListView({ requests, teachers, alerts, filterTeacher, setFilterTeacher,
     let av = "", bv = "";
     if (sortCol === "teacherName") { av = a.teacherName; bv = b.teacherName; }
     else if (sortCol === "subject") { av = a.subject || ""; bv = b.subject || ""; }
-    else if (sortCol === "requestDate") {
-      av = `${a.requestDate || ""} ${a.requestTime || ""}`;
-      bv = `${b.requestDate || ""} ${b.requestTime || ""}`;
-    }
+    else if (sortCol === "requestDate") { av = `${a.requestDate||""} ${a.requestTime||""}`; bv = `${b.requestDate||""} ${b.requestTime||""}`; }
     if (av < bv) return sortDir === "asc" ? -1 : 1;
     if (av > bv) return sortDir === "asc" ? 1 : -1;
     return 0;
@@ -365,14 +429,10 @@ function ListView({ requests, teachers, alerts, filterTeacher, setFilterTeacher,
 
   const SortBtn = ({ col, label }) => (
     <button onClick={() => handleSort(col)} style={{
-      background: sortCol === col ? "#eff6ff" : "transparent",
-      color: sortCol === col ? "#1e40af" : "#64748b",
-      border: `1px solid ${sortCol === col ? "#93c5fd" : "#e2e8f0"}`,
-      borderRadius: 6, padding: "5px 10px", cursor: "pointer", fontSize: 12, fontWeight: 600,
-      display: "inline-flex", alignItems: "center", gap: 2, whiteSpace: "nowrap"
-    }}>
-      {label}{sortIcon(col)}
-    </button>
+      background: sortCol === col ? "#eff6ff" : "transparent", color: sortCol === col ? "#1e40af" : "#64748b",
+      border: `1px solid ${sortCol === col ? "#93c5fd" : "#e2e8f0"}`, borderRadius: 6, padding: "5px 10px",
+      cursor: "pointer", fontSize: 12, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 2, whiteSpace: "nowrap"
+    }}>{label}{sortIcon(col)}</button>
   );
 
   return (
@@ -385,14 +445,28 @@ function ListView({ requests, teachers, alerts, filterTeacher, setFilterTeacher,
           </div>
         ))}
       </div>
+
+      {/* 검색/필터 */}
       <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
         <button style={C.btn()} onClick={() => { setForm(emptyForm()); setEditId(null); setView("form"); }}>+ 새 요청</button>
         <select style={C.select} value={filterTeacher} onChange={e => { setFilterTeacher(e.target.value); setFilterSubject("전체"); }}>
           <option value="전체">전체 선생님</option>
           {teachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
         </select>
-        <input style={{ ...C.input, width: 110 }} placeholder="검색..." value={search} onChange={e => setSearch(e.target.value)} />
+        <div style={{ position: "relative", flex: 1, minWidth: 160 }}>
+          <input style={{ ...C.input, paddingLeft: 32 }} placeholder="제목/강사명/과목 검색..." value={search} onChange={e => setSearch(e.target.value)} />
+          <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", fontSize: 14, color: "#94a3b8" }}>🔍</span>
+          {search && <button onClick={() => setSearch("")} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "#94a3b8", fontSize: 14 }}>✕</button>}
+        </div>
       </div>
+
+      {/* 검색 결과 중복 알림 */}
+      {search && filtered.length > 1 && (
+        <div style={{ background: "#fef3c7", border: "1px solid #fbbf24", borderRadius: 8, padding: "8px 12px", marginBottom: 10, fontSize: 12, color: "#92400e" }}>
+          🔍 <strong>"{search}"</strong> 검색 결과 {filtered.length}건 — 동일/유사 요청이 있는지 확인하세요!
+        </div>
+      )}
+
       {filterTeacher !== "전체" && availableSubs.length > 0 && (
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
           {["전체", ...availableSubs].map(sub => (
@@ -402,6 +476,7 @@ function ListView({ requests, teachers, alerts, filterTeacher, setFilterTeacher,
           ))}
         </div>
       )}
+
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
         <span style={{ fontSize: 12, color: "#94a3b8", marginRight: 2 }}>정렬:</span>
         <SortBtn col="teacherName" label="강사명" />
@@ -411,18 +486,27 @@ function ListView({ requests, teachers, alerts, filterTeacher, setFilterTeacher,
         <SortBtn col="status" label="상태" />
         <SortBtn col="copies" label="부수" />
       </div>
+
       <p style={{ fontSize: 12, color: "#94a3b8", marginBottom: 8 }}>총 {sortedFiltered.length}건</p>
+
       {sortedFiltered.length === 0
-        ? <div style={{ textAlign: "center", padding: 40, color: "#94a3b8", fontSize: 14 }}>등록된 요청이 없습니다</div>
+        ? <div style={{ textAlign: "center", padding: 40, color: "#94a3b8", fontSize: 14 }}>
+            {search ? `"${search}" 검색 결과가 없습니다` : "등록된 요청이 없습니다"}
+          </div>
         : sortedFiltered.map(item => {
           const st = statusBadge(item);
           const completed = item.printed && item.deliveredDate;
           const dDiff = item.dueDate ? diffDays(today(), item.dueDate) : null;
+          const sheets = calcSheets(item.pages, item.copies, item.isDuplex);
+          const counter = calcCounter(item.pages, item.copies);
+          const dupCount = titleGroups[item.title.trim()] || 0;
           return (
             <div key={item.id} style={{ background: completed ? "#f8fafc" : "#fff", borderRadius: 12, padding: 14, marginBottom: 10, boxShadow: "0 1px 4px rgba(0,0,0,0.08)", borderLeft: `4px solid ${completed ? "#22c55e" : "#f59e0b"}`, opacity: completed ? 0.78 : 1 }}>
               <div>
                 <span style={C.badge(st.color)}>{st.label}</span>
                 {item.subject && <span style={{ display: "inline-block", background: "#ede9fe", color: "#7c3aed", borderRadius: 6, padding: "2px 8px", fontSize: 11, fontWeight: 700, marginRight: 4 }}>{item.subject}</span>}
+                {item.paperSize && <span style={{ display: "inline-block", background: "#f0fdf4", color: "#16a34a", borderRadius: 6, padding: "2px 8px", fontSize: 11, fontWeight: 700, marginRight: 4 }}>{item.paperSize}</span>}
+                {dupCount > 1 && <span style={{ display: "inline-block", background: "#fef3c7", color: "#92400e", borderRadius: 6, padding: "2px 8px", fontSize: 11, fontWeight: 700, marginRight: 4 }}>⚠️ 동일제목 {dupCount}건</span>}
                 {!completed && dDiff !== null && dDiff <= 1 && <span style={C.badge("#ef4444")}>{dDiff === 0 ? "오늘마감" : "내일마감"}</span>}
                 <div style={{ fontWeight: 700, fontSize: 15, color: "#1e293b", marginTop: 4 }}>{item.title}</div>
                 <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>{item.teacherName} 선생님{item.subject ? ` · ${item.subject}` : ""}</div>
@@ -434,10 +518,13 @@ function ListView({ requests, teachers, alerts, filterTeacher, setFilterTeacher,
                     ⏰ {formatDate(item.dueDate)}{getDayLabel(item.dueDate)}{item.dueClass ? ` ${item.dueClass}` : ""}
                   </span>
                 )}
-                <span style={{ fontSize: 12, color: "#64748b" }}>📨 {item.route}</span>
+                {item.pages && item.copies && (
+                  <span style={{ fontSize: 12, color: "#1e40af", fontWeight: 600 }}>
+                    📄 {item.isDuplex ? "양면" : "단면"} {item.pages}p × {Number(item.copies).toLocaleString()}부 → 용지 {sheets.toLocaleString()} / 카운터 {counter.toLocaleString()}
+                  </span>
+                )}
                 {item.receiver && <span style={{ fontSize: 12, color: "#64748b" }}>👤 {item.receiver}</span>}
                 {item.printedBy && <span style={{ fontSize: 12, color: "#64748b" }}>🖨️ {item.printedBy}</span>}
-                {item.copies && <span style={{ fontSize: 12, color: "#7c3aed", fontWeight: 600 }}>📄 {Number(item.copies).toLocaleString()}부</span>}
                 {item.deliveredDate && <span style={{ fontSize: 12, color: "#64748b" }}>✅ {formatDate(item.deliveredDate)}{item.deliveryMethod ? ` (${item.deliveryMethod})` : ""}</span>}
                 {item.memo && <span style={{ fontSize: 12, color: "#94a3b8" }}>💬 {item.memo}</span>}
               </div>
@@ -451,6 +538,191 @@ function ListView({ requests, teachers, alerts, filterTeacher, setFilterTeacher,
             </div>
           );
         })}
+    </>
+  );
+}
+
+/* ── 일별 통계 탭 ── */
+function DailyStatsTab({ requests, copierCounters, onSaveCounter }) {
+  const [date, setDate] = useState(today());
+  const [inputs, setInputs] = useState({ 1: "", 2: "", 3: "", 4: "", 5: "" });
+  const [saving, setSaving] = useState(null);
+
+  const getC = (no, d = date) => copierCounters.find(c => c.machine_no === no && c.record_date === d);
+  const getPrevC = (no) => getC(no, getPrevDate(date));
+
+  useEffect(() => {
+    const newInputs = {};
+    [1, 2, 3, 4, 5].forEach(no => {
+      const c = getC(no);
+      newInputs[no] = c ? String(c.counter_value) : "";
+    });
+    setInputs(newInputs);
+  }, [date, copierCounters]);
+
+  const handleSave = async (no) => {
+    if (!inputs[no]) return;
+    setSaving(no);
+    await onSaveCounter(no, date, Number(inputs[no]));
+    setSaving(null);
+  };
+
+  // 1~3기: 당일 출력완료된 요청 기준
+  const dayReqs = requests.filter(r => r.requestDate === date && r.printed);
+  const totalExpectedCounter = dayReqs.reduce((s, r) => s + calcCounter(r.pages, r.copies), 0);
+  const totalSheets = dayReqs.reduce((s, r) => s + calcSheets(r.pages, r.copies, r.isDuplex), 0);
+
+  // 1~3기 실제 카운터 합산 (전일 대비 차이)
+  const machine123Diff = [1, 2, 3].reduce((s, no) => {
+    const c = getC(no), p = getPrevC(no);
+    return s + (c && p ? c.counter_value - p.counter_value : 0);
+  }, 0);
+  const waste123 = machine123Diff > 0 ? machine123Diff - totalExpectedCounter : null;
+
+  const thStyle = { padding: "8px 10px", background: "#1e40af", color: "#fff", fontSize: 11, textAlign: "center", whiteSpace: "nowrap" };
+  const tdStyle = (align = "center") => ({ padding: "7px 8px", fontSize: 12, textAlign: align, borderBottom: "1px solid #f1f5f9", whiteSpace: "nowrap" });
+
+  return (
+    <>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 16 }}>
+        <span style={{ fontSize: 14, fontWeight: 700, color: "#374151" }}>📈 일별 통계</span>
+        <input type="date" style={{ ...C.input, width: 160 }} value={date} onChange={e => setDate(e.target.value)} />
+        <span style={{ fontSize: 14, fontWeight: 700, color: "#1e40af" }}>{getDayLabel(date)}</span>
+      </div>
+
+      {/* 1~3기 요약 */}
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#374151", marginBottom: 8 }}>🖨️ 1~3기 복사기 집계 (요청 기준)</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+          {[
+            ["출력 건수", dayReqs.length + "건", "#dbeafe"],
+            ["총 용지매수", totalSheets.toLocaleString() + "매", "#dcfce7"],
+            ["예상 카운터", totalExpectedCounter.toLocaleString(), "#fef9c3"],
+            ["실제 카운터", machine123Diff > 0 ? machine123Diff.toLocaleString() : "-", "#ede9fe"],
+            ["파본 추정", waste123 !== null ? waste123.toLocaleString() : "-", waste123 > 0 ? "#fee2e2" : "#f0fdf4"],
+          ].map(([l, v, c]) => (
+            <div key={l} style={{ background: c, borderRadius: 10, padding: "10px 14px", flex: 1, minWidth: 80, textAlign: "center" }}>
+              <div style={{ fontSize: 16, fontWeight: 800, color: "#1e293b" }}>{v}</div>
+              <div style={{ fontSize: 11, color: "#475569", marginTop: 2 }}>{l}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* 상세 테이블 */}
+        {dayReqs.length > 0 ? (
+          <div style={{ ...C.card, padding: 0, overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 600 }}>
+              <thead>
+                <tr>{["선생님","과목","제목","규격","인쇄","페이지","요청부수","용지매수","예상카운터"].map(h => <th key={h} style={thStyle}>{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {dayReqs.map(r => {
+                  const sh = calcSheets(r.pages, r.copies, r.isDuplex);
+                  const ct = calcCounter(r.pages, r.copies);
+                  return (
+                    <tr key={r.id}>
+                      <td style={tdStyle("left")}>{r.teacherName}</td>
+                      <td style={tdStyle()}>{r.subject || "-"}</td>
+                      <td style={{ ...tdStyle("left"), maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis" }}>{r.title}</td>
+                      <td style={tdStyle()}>{r.paperSize || "-"}</td>
+                      <td style={tdStyle()}>{r.isDuplex ? "양면" : "단면"}</td>
+                      <td style={tdStyle()}>{r.pages || "-"}</td>
+                      <td style={tdStyle()}>{r.copies ? Number(r.copies).toLocaleString() : "-"}</td>
+                      <td style={{ ...tdStyle(), color: "#1e40af", fontWeight: 600 }}>{sh ? sh.toLocaleString() : "-"}</td>
+                      <td style={{ ...tdStyle(), color: "#7c3aed" }}>{ct ? ct.toLocaleString() : "-"}</td>
+                    </tr>
+                  );
+                })}
+                <tr style={{ background: "#f8fafc" }}>
+                  <td colSpan={7} style={{ ...tdStyle(), fontWeight: 700 }}>합 계</td>
+                  <td style={{ ...tdStyle(), color: "#1e40af", fontWeight: 700 }}>{totalSheets.toLocaleString()}</td>
+                  <td style={{ ...tdStyle(), color: "#7c3aed", fontWeight: 700 }}>{totalExpectedCounter.toLocaleString()}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div style={{ ...C.card, textAlign: "center", padding: 20, color: "#94a3b8" }}>해당 날짜에 출력 완료된 요청이 없습니다</div>
+        )}
+      </div>
+
+      {/* 복사기별 카운터 입력 (1~5기 모두) */}
+      <div style={{ fontSize: 13, fontWeight: 700, color: "#374151", marginBottom: 8 }}>📊 복사기별 퇴근 카운터 입력 (1~5기)</div>
+      <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 12 }}>매일 퇴근 시 각 복사기 카운터를 입력하면 전일 대비 사용량이 자동 계산됩니다.</div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+        {[1, 2, 3, 4, 5].map(no => {
+          const c = getC(no);
+          const p = getPrevC(no);
+          const diff = c && p ? c.counter_value - p.counter_value : null;
+          const previewDiff = inputs[no] && p ? Number(inputs[no]) - p.counter_value : null;
+          const isRequest = no <= 3;
+
+          return (
+            <div key={no} style={{ ...C.card, marginBottom: 0, border: isRequest ? "1px solid #bfdbfe" : "1px solid #e2e8f0" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <div>
+                  <span style={{ fontWeight: 700, fontSize: 14 }}>{no}기 복사기</span>
+                  <span style={{ marginLeft: 6, fontSize: 11, background: isRequest ? "#dbeafe" : "#f1f5f9", color: isRequest ? "#1e40af" : "#64748b", borderRadius: 6, padding: "2px 6px" }}>
+                    {isRequest ? "요청출력용" : "카운터전용"}
+                  </span>
+                </div>
+                {diff !== null && (
+                  <span style={{ background: isRequest ? "#dbeafe" : "#f0fdf4", color: isRequest ? "#1e40af" : "#059669", borderRadius: 8, padding: "3px 10px", fontSize: 12, fontWeight: 700 }}>
+                    사용 {diff.toLocaleString()}
+                  </span>
+                )}
+              </div>
+
+              {/* 전일/시작 카운터 */}
+              <div style={{ display: "flex", gap: 6, marginBottom: 10, alignItems: "center" }}>
+                <div style={{ flex: 1, textAlign: "center" }}>
+                  <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 2 }}>전일 카운터</div>
+                  <div style={{ fontWeight: 700, color: "#374151", background: "#f1f5f9", borderRadius: 8, padding: "6px", fontSize: 13 }}>
+                    {p ? p.counter_value.toLocaleString() : "미입력"}
+                  </div>
+                </div>
+                <div style={{ color: "#94a3b8" }}>→</div>
+                <div style={{ flex: 1, textAlign: "center" }}>
+                  <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 2 }}>오늘 입력값</div>
+                  <div style={{ fontWeight: 700, color: c ? "#059669" : "#94a3b8", background: c ? "#f0fdf4" : "#f1f5f9", borderRadius: 8, padding: "6px", fontSize: 13 }}>
+                    {c ? c.counter_value.toLocaleString() : "미입력"}
+                  </div>
+                </div>
+              </div>
+
+              {/* 입력 */}
+              <div style={{ display: "flex", gap: 6 }}>
+                <input type="number" style={{ ...C.input, flex: 1 }} value={inputs[no]}
+                  onChange={e => setInputs(prev => ({ ...prev, [no]: e.target.value }))}
+                  placeholder="퇴근 카운터 입력" />
+                <button style={{ ...C.btn(saving === no ? "#94a3b8" : "#1e40af"), whiteSpace: "nowrap" }}
+                  onClick={() => handleSave(no)} disabled={saving === no}>
+                  {saving === no ? "저장중" : "저장"}
+                </button>
+              </div>
+
+              {/* 예상 사용량 미리보기 */}
+              {previewDiff !== null && (
+                <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+                  <div style={{ flex: 1, background: "#f0fdf4", borderRadius: 8, padding: "6px", textAlign: "center" }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#059669" }}>{previewDiff.toLocaleString()}</div>
+                    <div style={{ fontSize: 10, color: "#6b7280" }}>예상 사용량</div>
+                  </div>
+                  {isRequest && totalExpectedCounter > 0 && (
+                    <div style={{ flex: 1, background: previewDiff - totalExpectedCounter > 0 ? "#fee2e2" : "#f0fdf4", borderRadius: 8, padding: "6px", textAlign: "center" }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: previewDiff - totalExpectedCounter > 0 ? "#dc2626" : "#059669" }}>
+                        {(previewDiff - totalExpectedCounter).toLocaleString()}
+                      </div>
+                      <div style={{ fontSize: 10, color: "#6b7280" }}>파본 추정</div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </>
   );
 }
@@ -518,8 +790,6 @@ function Dashboard({ requests, teachers, selYear, setSelYear, teacherSearch, set
             count: tReqs.filter(r => getYM(r.requestDate) === ym).length,
             copies: tReqs.filter(r => getYM(r.requestDate) === ym).reduce((s, r) => s + (Number(r.copies) || 0), 0),
           }));
-          const tTotal = tReqs.length;
-          const tCopies = tReqs.reduce((s, r) => s + (Number(r.copies) || 0), 0);
           const bg = ti % 2 === 0 ? "#fff" : "#f8fafc";
           return (
             <div key={t.id}>
@@ -528,13 +798,13 @@ function Dashboard({ requests, teachers, selYear, setSelYear, teacherSearch, set
                   onClick={() => onTeacherClick(t.id)}>{t.name}</div>
                 <div style={{ ...cell(52, true, bg, false, "#64748b"), fontSize: 10 }}>신청건수</div>
                 {tMonths.map((m, i) => <div key={i} style={{ ...cell(46, true, bg, m.count > 0, m.count > 0 ? "#1d4ed8" : "#94a3b8") }}>{m.count || ""}</div>)}
-                <div style={{ ...cell(52, true, bg, true, "#1e293b"), borderRight: "none" }}>{tTotal || 0}</div>
+                <div style={{ ...cell(52, true, bg, true, "#1e293b"), borderRight: "none" }}>{tReqs.length || 0}</div>
               </div>
               <div style={{ display: "flex", borderBottom: "2px solid #e2e8f0" }}>
                 <div style={{ ...cell(80, false, bg, false, "#94a3b8") }}></div>
                 <div style={{ ...cell(52, true, bg, false, "#64748b"), fontSize: 10 }}>총부수</div>
                 {tMonths.map((m, i) => <div key={i} style={{ ...cell(46, true, bg, false, m.copies > 0 ? "#7c3aed" : "#94a3b8") }}>{m.copies ? m.copies.toLocaleString() : ""}</div>)}
-                <div style={{ ...cell(52, true, bg, true, "#7c3aed"), borderRight: "none" }}>{tCopies ? tCopies.toLocaleString() : 0}</div>
+                <div style={{ ...cell(52, true, bg, true, "#7c3aed"), borderRight: "none" }}>{tReqs.reduce((s, r) => s + (Number(r.copies) || 0), 0).toLocaleString()}</div>
               </div>
             </div>
           );
@@ -554,16 +824,13 @@ function AdminView({ teachers, requests, addTeacher, updateTeacher, deleteTeache
   const [teacherSearch, setTeacherSearch] = useState("");
   const [deleteFrom, setDeleteFrom] = useState("");
   const [deleteTo, setDeleteTo] = useState("");
-
   const filteredT = teachers.filter(t => !teacherSearch || t.name.includes(teacherSearch));
-
   const handleTeacherSave = async () => {
     const name = teacherForm.name.trim(); if (!name) return;
     if (editTeacherId) { await updateTeacher(editTeacherId, name); setEditTeacherId(null); }
     else { if (teachers.some(t => t.name === name)) { alert("이미 등록된 이름입니다."); return; } await addTeacher(name); }
     setTeacherForm({ name: "" });
   };
-
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
@@ -578,13 +845,9 @@ function AdminView({ teachers, requests, addTeacher, updateTeacher, deleteTeache
         <div style={C.card}>
           <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>선생님 개별 등록</div>
           <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-            <input style={{ ...C.input, flex: 1 }} value={teacherForm.name}
-              onChange={e => setTeacherForm({ name: e.target.value })}
-              placeholder="선생님 이름"
-              onKeyDown={e => { if (e.key === "Enter") handleTeacherSave(); }} />
-            <button style={C.btn(editTeacherId ? "#059669" : "#1e40af")} onClick={handleTeacherSave}>
-              {editTeacherId ? "수정완료" : "등록"}
-            </button>
+            <input style={{ ...C.input, flex: 1 }} value={teacherForm.name} onChange={e => setTeacherForm({ name: e.target.value })}
+              placeholder="선생님 이름" onKeyDown={e => { if (e.key === "Enter") handleTeacherSave(); }} />
+            <button style={C.btn(editTeacherId ? "#059669" : "#1e40af")} onClick={handleTeacherSave}>{editTeacherId ? "수정완료" : "등록"}</button>
             {editTeacherId && <button style={C.btn("#94a3b8")} onClick={() => { setEditTeacherId(null); setTeacherForm({ name: "" }); }}>취소</button>}
           </div>
           <div style={{ background: "#f8fafc", borderRadius: 10, padding: 14, marginBottom: 20, border: "1px dashed #cbd5e1" }}>
@@ -647,6 +910,7 @@ export default function App() {
   const [pwError, setPwError] = useState(false);
   const [requests, setRequests] = useState([]);
   const [teachers, setTeachers] = useState([]);
+  const [copierCounters, setCopierCounters] = useState([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState("dashboard");
   const [form, setForm] = useState(emptyForm());
@@ -661,24 +925,26 @@ export default function App() {
     const { data } = await supabase.from("teachers").select("*").order("name");
     if (data) setTeachers(data);
   }, []);
-
   const loadRequests = useCallback(async () => {
     const { data } = await supabase.from("copy_requests").select("*").order("request_date", { ascending: false });
     if (data) setRequests(data.map(fromSupabase));
+  }, []);
+  const loadCopierCounters = useCallback(async () => {
+    const { data } = await supabase.from("copier_counters").select("*").order("record_date", { ascending: false });
+    if (data) setCopierCounters(data);
   }, []);
 
   useEffect(() => {
     if (role) {
       setLoading(true);
-      Promise.all([loadTeachers(), loadRequests()]).finally(() => setLoading(false));
+      Promise.all([loadTeachers(), loadRequests(), loadCopierCounters()]).finally(() => setLoading(false));
     }
-  }, [role, loadTeachers, loadRequests]);
+  }, [role, loadTeachers, loadRequests, loadCopierCounters]);
 
   const addTeacher = async (name) => { await supabase.from("teachers").insert({ name }); await loadTeachers(); };
   const updateTeacher = async (id, name) => { await supabase.from("teachers").update({ name }).eq("id", id); await loadTeachers(); };
   const deleteTeacher = async (id) => { await supabase.from("teachers").delete().eq("id", id); await loadTeachers(); };
   const bulkAddTeachers = async (names) => { if (!names.length) return; await supabase.from("teachers").insert(names.map(name => ({ name }))); await loadTeachers(); };
-
   const saveReqItem = async (item) => {
     const payload = toSupabase(item);
     if (item.id) await supabase.from("copy_requests").update(payload).eq("id", item.id);
@@ -688,6 +954,10 @@ export default function App() {
   const deleteReq = async (id) => { await supabase.from("copy_requests").delete().eq("id", id); await loadRequests(); };
   const togglePrinted = async (item) => { await supabase.from("copy_requests").update({ is_printed: !item.printed }).eq("id", item.id); await loadRequests(); };
   const bulkDeleteRequests = async (from, to) => { await supabase.from("copy_requests").delete().gte("request_date", from).lte("request_date", to); await loadRequests(); };
+  const saveCopierCounter = async (machineNo, date, value) => {
+    await supabase.from("copier_counters").upsert({ machine_no: machineNo, record_date: date, counter_value: value }, { onConflict: "machine_no,record_date" });
+    await loadCopierCounters();
+  };
 
   const handleSave = async () => {
     if (!form.teacherId || !form.title || !form.requestDate) { alert("선생님, 제목, 신청일시는 필수입니다."); return; }
@@ -698,8 +968,7 @@ export default function App() {
   const alerts = requests.filter(r => {
     if (r.printed && r.deliveredDate) return false;
     if (!r.dueDate) return false;
-    const d = diffDays(today(), r.dueDate);
-    return d >= 0 && d <= 1;
+    return diffDays(today(), r.dueDate) >= 0 && diffDays(today(), r.dueDate) <= 1;
   });
 
   if (!role) return (
@@ -728,6 +997,7 @@ export default function App() {
   const navItems = [
     { key: "dashboard", label: "📊 현황" },
     { key: "list", label: "📋 목록" },
+    { key: "daily", label: "📈 일별통계" },
     ...(role === "admin" ? [{ key: "admin", label: "⚙️ 관리" }] : []),
   ];
 
@@ -760,35 +1030,11 @@ export default function App() {
         </div>
       )}
       <div style={C.body}>
-        {view === "dashboard" && (
-          <Dashboard requests={requests} teachers={teachers}
-            selYear={selYear} setSelYear={setSelYear}
-            teacherSearch={teacherSearch} setTeacherSearch={setTeacherSearch}
-            onTeacherClick={(id) => { setFilterTeacher(id); setFilterSubject("전체"); setView("list"); }}
-          />
-        )}
-        {view === "list" && (
-          <ListView requests={requests} teachers={teachers} alerts={alerts}
-            filterTeacher={filterTeacher} setFilterTeacher={setFilterTeacher}
-            filterSubject={filterSubject} setFilterSubject={setFilterSubject}
-            search={search} setSearch={setSearch}
-            togglePrinted={togglePrinted} deleteReq={deleteReq}
-            setForm={setForm} setEditId={setEditId} setView={setView}
-          />
-        )}
-        {view === "form" && (
-          <FormView teachers={teachers} form={form} setForm={setForm}
-            editId={editId} onSave={handleSave}
-            onCancel={() => { setView("list"); setEditId(null); setForm(emptyForm()); }}
-          />
-        )}
-        {view === "admin" && role === "admin" && (
-          <AdminView teachers={teachers} requests={requests}
-            addTeacher={addTeacher} updateTeacher={updateTeacher}
-            deleteTeacher={deleteTeacher} bulkAddTeachers={bulkAddTeachers}
-            bulkDeleteRequests={bulkDeleteRequests} setView={setView}
-          />
-        )}
+        {view === "dashboard" && <Dashboard requests={requests} teachers={teachers} selYear={selYear} setSelYear={setSelYear} teacherSearch={teacherSearch} setTeacherSearch={setTeacherSearch} onTeacherClick={(id) => { setFilterTeacher(id); setFilterSubject("전체"); setView("list"); }} />}
+        {view === "list" && <ListView requests={requests} teachers={teachers} alerts={alerts} filterTeacher={filterTeacher} setFilterTeacher={setFilterTeacher} filterSubject={filterSubject} setFilterSubject={setFilterSubject} search={search} setSearch={setSearch} togglePrinted={togglePrinted} deleteReq={deleteReq} setForm={setForm} setEditId={setEditId} setView={setView} />}
+        {view === "daily" && <DailyStatsTab requests={requests} copierCounters={copierCounters} onSaveCounter={saveCopierCounter} />}
+        {view === "form" && <FormView teachers={teachers} form={form} setForm={setForm} editId={editId} onSave={handleSave} allRequests={requests} onCancel={() => { setView("list"); setEditId(null); setForm(emptyForm()); }} />}
+        {view === "admin" && role === "admin" && <AdminView teachers={teachers} requests={requests} addTeacher={addTeacher} updateTeacher={updateTeacher} deleteTeacher={deleteTeacher} bulkAddTeachers={bulkAddTeachers} bulkDeleteRequests={bulkDeleteRequests} setView={setView} />}
       </div>
     </div>
   );
