@@ -543,186 +543,356 @@ function ListView({ requests, teachers, alerts, filterTeacher, setFilterTeacher,
 }
 
 /* ── 일별 통계 탭 ── */
-function DailyStatsTab({ requests, copierCounters, onSaveCounter }) {
+function DailyStatsTab({ requests, copierCounters, onSaveCounter, onSaveAllCounters }) {
+  const [subTab, setSubTab] = useState("input"); // "input" | "monthly"
   const [date, setDate] = useState(today());
   const [inputs, setInputs] = useState({ 1: "", 2: "", 3: "", 4: "", 5: "" });
-  const [saving, setSaving] = useState(null);
+  const [startInputs, setStartInputs] = useState({ 1: "", 2: "", 3: "", 4: "", 5: "" });
+  const [memoInputs, setMemoInputs] = useState({ 1: "", 2: "", 3: "", 4: "", 5: "" });
+  const [saving, setSaving] = useState(false);
+  const [savedMsg, setSavedMsg] = useState("");
+  const [monthView, setMonthView] = useState(today().slice(0, 7)); // YYYY-MM
 
   const getC = (no, d = date) => copierCounters.find(c => c.machine_no === no && c.record_date === d);
-  const getPrevC = (no) => getC(no, getPrevDate(date));
+  const getPrevC = (no, d = date) => {
+    const prev = getPrevDate(d);
+    return copierCounters.find(c => c.machine_no === no && c.record_date === prev);
+  };
 
   useEffect(() => {
-    const newInputs = {};
+    const newInputs = {}, newStart = {}, newMemo = {};
     [1, 2, 3, 4, 5].forEach(no => {
       const c = getC(no);
       newInputs[no] = c ? String(c.counter_value) : "";
+      newStart[no] = c && c.start_counter != null ? String(c.start_counter) : "";
+      newMemo[no] = c && c.memo ? c.memo : "";
     });
     setInputs(newInputs);
+    setStartInputs(newStart);
+    setMemoInputs(newMemo);
   }, [date, copierCounters]);
 
-  const handleSave = async (no) => {
-    if (!inputs[no]) return;
-    setSaving(no);
-    await onSaveCounter(no, date, Number(inputs[no]));
-    setSaving(null);
+  // 실제 사용량 계산 (시작카운터 있으면 우선, 없으면 전일카운터 사용)
+  const getActualStart = (no) => {
+    const c = getC(no);
+    if (c && c.start_counter != null) return c.start_counter;
+    const p = getPrevC(no);
+    return p ? p.counter_value : null;
   };
 
-  // 1~3기: 당일 출력완료된 요청 기준
+  // 전체 저장
+  const handleSaveAll = async () => {
+    const toSave = [1, 2, 3, 4, 5].filter(no => inputs[no] !== "");
+    if (toSave.length === 0) { alert("입력된 카운터가 없습니다."); return; }
+    setSaving(true);
+    await onSaveAllCounters(date, inputs, startInputs, memoInputs);
+    setSaving(false);
+    setSavedMsg(`✅ ${toSave.length}개 저장 완료!`);
+    setTimeout(() => setSavedMsg(""), 3000);
+  };
+
   const dayReqs = requests.filter(r => r.requestDate === date && r.printed);
   const totalExpectedCounter = dayReqs.reduce((s, r) => s + calcCounter(r.pages, r.copies), 0);
   const totalSheets = dayReqs.reduce((s, r) => s + calcSheets(r.pages, r.copies, r.isDuplex), 0);
-
-  // 1~3기 실제 카운터 합산 (전일 대비 차이)
   const machine123Diff = [1, 2, 3].reduce((s, no) => {
     const c = getC(no), p = getPrevC(no);
     return s + (c && p ? c.counter_value - p.counter_value : 0);
   }, 0);
   const waste123 = machine123Diff > 0 ? machine123Diff - totalExpectedCounter : null;
 
-  const thStyle = { padding: "8px 10px", background: "#1e40af", color: "#fff", fontSize: 11, textAlign: "center", whiteSpace: "nowrap" };
-  const tdStyle = (align = "center") => ({ padding: "7px 8px", fontSize: 12, textAlign: align, borderBottom: "1px solid #f1f5f9", whiteSpace: "nowrap" });
+  // 월별 데이터 생성
+  const getDaysInMonth = (ym) => {
+    const [y, m] = ym.split("-").map(Number);
+    return new Date(y, m, 0).getDate();
+  };
+  const monthDays = Array.from({ length: getDaysInMonth(monthView) }, (_, i) => {
+    const d = `${monthView}-${String(i + 1).padStart(2, "0")}`;
+    return d;
+  });
+
+  const thStyle = { padding: "7px 8px", background: "#1e40af", color: "#fff", fontSize: 11, textAlign: "center", whiteSpace: "nowrap", borderRight: "1px solid #3b82f6" };
+  const tdStyle = (align = "center", bold = false, color = "#374151", bg = "#fff") => ({
+    padding: "6px 8px", fontSize: 11, textAlign: align, borderBottom: "1px solid #f1f5f9",
+    borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap", fontWeight: bold ? 700 : 400, color, background: bg
+  });
 
   return (
     <>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 16 }}>
-        <span style={{ fontSize: 14, fontWeight: 700, color: "#374151" }}>📈 일별 통계</span>
-        <input type="date" style={{ ...C.input, width: 160 }} value={date} onChange={e => setDate(e.target.value)} />
-        <span style={{ fontSize: 14, fontWeight: 700, color: "#1e40af" }}>{getDayLabel(date)}</span>
+      {/* 서브 탭 */}
+      <div style={{ display: "flex", borderBottom: "1px solid #e2e8f0", marginBottom: 16 }}>
+        <button style={C.tab(subTab === "input")} onClick={() => setSubTab("input")}>📅 일별 카운터 입력</button>
+        <button style={C.tab(subTab === "monthly")} onClick={() => setSubTab("monthly")}>📊 월별 현황</button>
       </div>
 
-      {/* 1~3기 요약 */}
-      <div style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: "#374151", marginBottom: 8 }}>🖨️ 1~3기 복사기 집계 (요청 기준)</div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-          {[
-            ["출력 건수", dayReqs.length + "건", "#dbeafe"],
-            ["총 용지매수", totalSheets.toLocaleString() + "매", "#dcfce7"],
-            ["예상 카운터", totalExpectedCounter.toLocaleString(), "#fef9c3"],
-            ["실제 카운터", machine123Diff > 0 ? machine123Diff.toLocaleString() : "-", "#ede9fe"],
-            ["파본 추정", waste123 !== null ? waste123.toLocaleString() : "-", waste123 > 0 ? "#fee2e2" : "#f0fdf4"],
-          ].map(([l, v, c]) => (
-            <div key={l} style={{ background: c, borderRadius: 10, padding: "10px 14px", flex: 1, minWidth: 80, textAlign: "center" }}>
-              <div style={{ fontSize: 16, fontWeight: 800, color: "#1e293b" }}>{v}</div>
-              <div style={{ fontSize: 11, color: "#475569", marginTop: 2 }}>{l}</div>
-            </div>
-          ))}
-        </div>
+      {/* ─── 일별 입력 ─── */}
+      {subTab === "input" && (
+        <>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 16 }}>
+            <span style={{ fontSize: 14, fontWeight: 700, color: "#374151" }}>📈 일별 통계</span>
+            <input type="date" style={{ ...C.input, width: 160 }} value={date} onChange={e => setDate(e.target.value)} />
+            <span style={{ fontSize: 14, fontWeight: 700, color: "#1e40af" }}>{getDayLabel(date)}</span>
+          </div>
 
-        {/* 상세 테이블 */}
-        {dayReqs.length > 0 ? (
+          {/* 1~3기 요약 */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#374151", marginBottom: 8 }}>🖨️ 1~3기 복사기 집계 (요청 기준)</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+              {[
+                ["출력 건수", dayReqs.length + "건", "#dbeafe"],
+                ["총 용지매수", totalSheets.toLocaleString() + "매", "#dcfce7"],
+                ["예상 카운터", totalExpectedCounter.toLocaleString(), "#fef9c3"],
+                ["실제 카운터(1~3기)", machine123Diff > 0 ? machine123Diff.toLocaleString() : "-", "#ede9fe"],
+                ["파본 추정", waste123 !== null ? waste123.toLocaleString() : "-", waste123 > 0 ? "#fee2e2" : "#f0fdf4"],
+              ].map(([l, v, c]) => (
+                <div key={l} style={{ background: c, borderRadius: 10, padding: "10px 14px", flex: 1, minWidth: 80, textAlign: "center" }}>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: "#1e293b" }}>{v}</div>
+                  <div style={{ fontSize: 10, color: "#475569", marginTop: 2 }}>{l}</div>
+                </div>
+              ))}
+            </div>
+            {dayReqs.length > 0 && (
+              <div style={{ ...C.card, padding: 0, overflowX: "auto", marginBottom: 8 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 600 }}>
+                  <thead>
+                    <tr>{["선생님","과목","제목","규격","인쇄","페이지","요청부수","용지매수","예상카운터"].map(h => <th key={h} style={thStyle}>{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {dayReqs.map(r => {
+                      const sh = calcSheets(r.pages, r.copies, r.isDuplex);
+                      const ct = calcCounter(r.pages, r.copies);
+                      return (
+                        <tr key={r.id}>
+                          <td style={tdStyle("left")}>{r.teacherName}</td>
+                          <td style={tdStyle()}>{r.subject || "-"}</td>
+                          <td style={{ ...tdStyle("left"), maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis" }}>{r.title}</td>
+                          <td style={tdStyle()}>{r.paperSize || "-"}</td>
+                          <td style={tdStyle()}>{r.isDuplex ? "양면" : "단면"}</td>
+                          <td style={tdStyle()}>{r.pages || "-"}</td>
+                          <td style={tdStyle()}>{r.copies ? Number(r.copies).toLocaleString() : "-"}</td>
+                          <td style={tdStyle("center", true, "#1e40af")}>{sh ? sh.toLocaleString() : "-"}</td>
+                          <td style={tdStyle("center", false, "#7c3aed")}>{ct ? ct.toLocaleString() : "-"}</td>
+                        </tr>
+                      );
+                    })}
+                    <tr style={{ background: "#f8fafc" }}>
+                      <td colSpan={7} style={tdStyle("center", true)}>합 계</td>
+                      <td style={tdStyle("center", true, "#1e40af")}>{totalSheets.toLocaleString()}</td>
+                      <td style={tdStyle("center", true, "#7c3aed")}>{totalExpectedCounter.toLocaleString()}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* 복사기 카운터 일괄 입력 */}
+          <div style={{ ...C.card }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#374151" }}>📊 복사기 퇴근 카운터 입력 (1~5기)</div>
+                <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>입력 후 전체 저장 버튼을 한번만 누르세요</div>
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                {savedMsg && <span style={{ color: "#059669", fontWeight: 700, fontSize: 13 }}>{savedMsg}</span>}
+                <button style={{ ...C.btn(saving ? "#94a3b8" : "#059669"), fontSize: 14, padding: "10px 20px" }}
+                  onClick={handleSaveAll} disabled={saving}>
+                  {saving ? "저장 중..." : "💾 전체 저장"}
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 }}>
+              {[1, 2, 3, 4, 5].map(no => {
+                const c = getC(no);
+                const p = getPrevC(no);
+                const actualStart = getActualStart(no);
+                const savedDiff = c && actualStart != null ? c.counter_value - actualStart : null;
+                const previewEnd = inputs[no] !== "" ? Number(inputs[no]) : null;
+                const previewStart = startInputs[no] !== "" ? Number(startInputs[no]) : actualStart;
+                const previewDiff = previewEnd !== null && previewStart !== null ? previewEnd - previewStart : null;
+                const isRequest = no <= 3;
+                const isReplaced = c && c.start_counter != null;
+                return (
+                  <div key={no} style={{ background: isRequest ? "#eff6ff" : "#f8fafc", borderRadius: 10, padding: 12, border: `1px solid ${isRequest ? "#bfdbfe" : "#e2e8f0"}` }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <span style={{ fontWeight: 700, fontSize: 13 }}>{no}기</span>
+                      <div style={{ display: "flex", gap: 4 }}>
+                        {isReplaced && <span style={{ fontSize: 10, background: "#fef3c7", color: "#92400e", borderRadius: 4, padding: "1px 5px" }}>교체</span>}
+                        <span style={{ fontSize: 10, background: isRequest ? "#dbeafe" : "#f1f5f9", color: isRequest ? "#1e40af" : "#64748b", borderRadius: 4, padding: "1px 5px" }}>
+                          {isRequest ? "요청용" : "전용"}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* 전일/시작 카운터 */}
+                    <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 2 }}>
+                      {isReplaced ? "시작 카운터 (교체)" : "전일 카운터 (자동)"}
+                    </div>
+                    <div style={{ fontWeight: 600, color: isReplaced ? "#92400e" : "#374151", background: isReplaced ? "#fef3c7" : "#fff", borderRadius: 6, padding: "5px 8px", fontSize: 12, marginBottom: 6, textAlign: "center" }}>
+                      {actualStart != null ? actualStart.toLocaleString() : "미입력"}
+                    </div>
+
+                    {/* 교체 시 시작카운터 직접 입력 */}
+                    <div style={{ fontSize: 10, color: "#f59e0b", marginBottom: 2 }}>시작 카운터 (교체시만 입력)</div>
+                    <input type="number" style={{ ...C.input, fontSize: 11, padding: "5px 8px", marginBottom: 6, background: startInputs[no] ? "#fef3c7" : "#fff" }}
+                      value={startInputs[no]}
+                      onChange={e => setStartInputs(prev => ({ ...prev, [no]: e.target.value }))}
+                      placeholder="교체시만 입력" />
+
+                    {/* 오늘 카운터 */}
+                    <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 2 }}>오늘 카운터 *</div>
+                    <input type="number" style={{ ...C.input, fontSize: 12, padding: "6px 8px", marginBottom: 6 }}
+                      value={inputs[no]}
+                      onChange={e => setInputs(prev => ({ ...prev, [no]: e.target.value }))}
+                      placeholder="퇴근 카운터" />
+
+                    {/* 비고 */}
+                    <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 2 }}>비고</div>
+                    <input type="text" style={{ ...C.input, fontSize: 11, padding: "5px 8px", marginBottom: 6 }}
+                      value={memoInputs[no]}
+                      onChange={e => setMemoInputs(prev => ({ ...prev, [no]: e.target.value }))}
+                      placeholder="교체, 고장 등" />
+
+                    {/* 사용량 미리보기 */}
+                    {previewDiff !== null && (
+                      <div style={{ background: "#f0fdf4", borderRadius: 6, padding: "4px", textAlign: "center" }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "#059669" }}>{previewDiff.toLocaleString()}</div>
+                        <div style={{ fontSize: 9, color: "#6b7280" }}>예상 사용량</div>
+                      </div>
+                    )}
+                    {savedDiff !== null && inputs[no] === "" && (
+                      <div style={{ background: "#dbeafe", borderRadius: 6, padding: "4px", textAlign: "center" }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "#1e40af" }}>{savedDiff.toLocaleString()}</div>
+                        <div style={{ fontSize: 9, color: "#3b82f6" }}>저장된 사용량</div>
+                      </div>
+                    )}
+                    {c && c.memo && inputs[no] === "" && (
+                      <div style={{ marginTop: 4, background: "#fef3c7", borderRadius: 6, padding: "4px", textAlign: "center" }}>
+                        <div style={{ fontSize: 10, color: "#92400e" }}>📝 {c.memo}</div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ─── 월별 현황 ─── */}
+      {subTab === "monthly" && (
+        <>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 16 }}>
+            <span style={{ fontSize: 14, fontWeight: 700, color: "#374151" }}>📊 월별 카운터 현황</span>
+            <input type="month" style={{ ...C.input, width: 160 }} value={monthView} onChange={e => setMonthView(e.target.value)} />
+          </div>
+
           <div style={{ ...C.card, padding: 0, overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 600 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
               <thead>
-                <tr>{["선생님","과목","제목","규격","인쇄","페이지","요청부수","용지매수","예상카운터"].map(h => <th key={h} style={thStyle}>{h}</th>)}</tr>
+                <tr>
+                  <th style={{ ...thStyle, background: "#0f172a" }}>날짜</th>
+                  <th style={{ ...thStyle, background: "#0f172a" }}>요일</th>
+                  {[1, 2, 3, 4, 5].map(no => (
+                    <th key={no} colSpan={2} style={{ ...thStyle, background: no <= 3 ? "#1e40af" : "#374151", borderRight: "2px solid #fff" }}>
+                      {no}기 {no <= 3 ? "(요청용)" : "(전용)"}
+                    </th>
+                  ))}
+                  <th style={{ ...thStyle, background: "#059669" }}>1~3기 합계</th>
+                  <th style={{ ...thStyle, background: "#7c3aed" }}>파본 추정</th>
+                  <th style={{ ...thStyle, background: "#92400e" }}>비고</th>
+                </tr>
+                <tr>
+                  <th style={{ ...thStyle, background: "#1e293b", fontSize: 10 }}></th>
+                  <th style={{ ...thStyle, background: "#1e293b", fontSize: 10 }}></th>
+                  {[1, 2, 3, 4, 5].map(no => (
+                    [<th key={`${no}c`} style={{ ...thStyle, background: no <= 3 ? "#1e3a8a" : "#475569", fontSize: 10 }}>카운터</th>,
+                     <th key={`${no}d`} style={{ ...thStyle, background: no <= 3 ? "#1e3a8a" : "#475569", fontSize: 10, borderRight: "2px solid #94a3b8" }}>사용량</th>]
+                  ))}
+                  <th style={{ ...thStyle, background: "#047857", fontSize: 10 }}>사용량</th>
+                  <th style={{ ...thStyle, background: "#6d28d9", fontSize: 10 }}>수량</th>
+                </tr>
               </thead>
               <tbody>
-                {dayReqs.map(r => {
-                  const sh = calcSheets(r.pages, r.copies, r.isDuplex);
-                  const ct = calcCounter(r.pages, r.copies);
+                {monthDays.map((d, idx) => {
+                  const dayOfWeek = DAYS[new Date(d + "T00:00:00").getDay()];
+                  const isWeekend = dayOfWeek === "토" || dayOfWeek === "일";
+                  const rowBg = isWeekend ? "#fafafa" : "#fff";
+
+                  const machineData = [1, 2, 3, 4, 5].map(no => {
+                    const c = getC(no, d);
+                    const p = getPrevC(no, d);
+                    const startC = c && c.start_counter != null ? c.start_counter : (p ? p.counter_value : null);
+                    const diff = c && startC != null ? c.counter_value - startC : null;
+                    return { counter: c ? c.counter_value : null, diff, isReplaced: c && c.start_counter != null, memo: c ? c.memo : null };
+                  });
+
+                  const sum123 = machineData.slice(0, 3).reduce((s, m) => s + (m.diff || 0), 0);
+                  const dayReqsForDate = requests.filter(r => r.requestDate === d && r.printed);
+                  const expectedForDate = dayReqsForDate.reduce((s, r) => s + calcCounter(r.pages, r.copies), 0);
+                  const waste = sum123 > 0 && expectedForDate > 0 ? sum123 - expectedForDate : null;
+                  const hasData = machineData.some(m => m.counter !== null);
+
                   return (
-                    <tr key={r.id}>
-                      <td style={tdStyle("left")}>{r.teacherName}</td>
-                      <td style={tdStyle()}>{r.subject || "-"}</td>
-                      <td style={{ ...tdStyle("left"), maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis" }}>{r.title}</td>
-                      <td style={tdStyle()}>{r.paperSize || "-"}</td>
-                      <td style={tdStyle()}>{r.isDuplex ? "양면" : "단면"}</td>
-                      <td style={tdStyle()}>{r.pages || "-"}</td>
-                      <td style={tdStyle()}>{r.copies ? Number(r.copies).toLocaleString() : "-"}</td>
-                      <td style={{ ...tdStyle(), color: "#1e40af", fontWeight: 600 }}>{sh ? sh.toLocaleString() : "-"}</td>
-                      <td style={{ ...tdStyle(), color: "#7c3aed" }}>{ct ? ct.toLocaleString() : "-"}</td>
+                    <tr key={d} style={{ background: rowBg, opacity: isWeekend ? 0.7 : 1 }}>
+                      <td style={tdStyle("center", false, "#374151", rowBg)}>{d.slice(5)}</td>
+                      <td style={tdStyle("center", true, isWeekend ? "#dc2626" : "#374151", rowBg)}>{dayOfWeek}</td>
+                      {machineData.map((m, i) => {
+                        const no = i + 1;
+                        const isReq = no <= 3;
+                        return [
+                          <td key={`${no}c`} style={tdStyle("right", false, m.counter ? "#374151" : "#d1d5db", rowBg)}>
+                            {m.counter !== null ? m.counter.toLocaleString() : "-"}
+                          </td>,
+                          <td key={`${no}d`} style={{ ...tdStyle("right", m.diff > 0, isReq ? "#1e40af" : "#059669", rowBg), borderRight: "2px solid #e2e8f0" }}>
+                            {m.diff !== null ? m.diff.toLocaleString() : "-"}
+                          </td>
+                        ];
+                      })}
+                      <td style={tdStyle("right", sum123 > 0, "#059669", rowBg)}>
+                        {sum123 > 0 ? sum123.toLocaleString() : "-"}
+                      </td>
+                      <td style={tdStyle("right", waste > 0, waste > 0 ? "#dc2626" : "#6b7280", rowBg)}>
+                        {waste !== null ? waste.toLocaleString() : "-"}
+                      </td>
+                      <td style={tdStyle("left", false, "#92400e", rowBg)} title={machineData.map((m,i) => m.memo ? `${i+1}기:${m.memo}` : "").filter(Boolean).join(" / ")}>
+                        {machineData.some(m => m.isReplaced) && <span style={{ background: "#fef3c7", borderRadius: 4, padding: "1px 5px", fontSize: 10, marginRight: 4 }}>🔄교체</span>}
+                        {machineData.map((m,i) => m.memo ? `${i+1}기:${m.memo}` : "").filter(Boolean).join(" ")}
+                      </td>
                     </tr>
                   );
                 })}
-                <tr style={{ background: "#f8fafc" }}>
-                  <td colSpan={7} style={{ ...tdStyle(), fontWeight: 700 }}>합 계</td>
-                  <td style={{ ...tdStyle(), color: "#1e40af", fontWeight: 700 }}>{totalSheets.toLocaleString()}</td>
-                  <td style={{ ...tdStyle(), color: "#7c3aed", fontWeight: 700 }}>{totalExpectedCounter.toLocaleString()}</td>
+                {/* 합계 행 */}
+                <tr style={{ background: "#1e3a8a" }}>
+                  <td colSpan={2} style={{ ...tdStyle("center", true, "#fff", "#1e3a8a") }}>합 계</td>
+                  {[1, 2, 3, 4, 5].map(no => {
+                    const total = monthDays.reduce((s, d) => {
+                      const c = getC(no, d), p = getPrevC(no, d);
+                      return s + (c && p ? c.counter_value - p.counter_value : 0);
+                    }, 0);
+                    return [
+                      <td key={`${no}c`} style={tdStyle("right", false, "#94a3b8", "#1e3a8a")}></td>,
+                      <td key={`${no}d`} style={{ ...tdStyle("right", true, "#fff", "#1e3a8a"), borderRight: "2px solid #475569" }}>
+                        {total > 0 ? total.toLocaleString() : "-"}
+                      </td>
+                    ];
+                  })}
+                  <td style={tdStyle("right", true, "#6ee7b7", "#1e3a8a")}>
+                    {monthDays.reduce((s, d) => {
+                      return s + [1,2,3].reduce((ss, no) => {
+                        const c = getC(no, d), p = getPrevC(no, d);
+                        return ss + (c && p ? c.counter_value - p.counter_value : 0);
+                      }, 0);
+                    }, 0).toLocaleString()}
+                  </td>
+                  <td style={tdStyle("right", true, "#fca5a5", "#1e3a8a")}>-</td>
+                  <td style={tdStyle("left", false, "#94a3b8", "#1e3a8a")}></td>
                 </tr>
               </tbody>
             </table>
           </div>
-        ) : (
-          <div style={{ ...C.card, textAlign: "center", padding: 20, color: "#94a3b8" }}>해당 날짜에 출력 완료된 요청이 없습니다</div>
-        )}
-      </div>
-
-      {/* 복사기별 카운터 입력 (1~5기 모두) */}
-      <div style={{ fontSize: 13, fontWeight: 700, color: "#374151", marginBottom: 8 }}>📊 복사기별 퇴근 카운터 입력 (1~5기)</div>
-      <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 12 }}>매일 퇴근 시 각 복사기 카운터를 입력하면 전일 대비 사용량이 자동 계산됩니다.</div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
-        {[1, 2, 3, 4, 5].map(no => {
-          const c = getC(no);
-          const p = getPrevC(no);
-          const diff = c && p ? c.counter_value - p.counter_value : null;
-          const previewDiff = inputs[no] && p ? Number(inputs[no]) - p.counter_value : null;
-          const isRequest = no <= 3;
-
-          return (
-            <div key={no} style={{ ...C.card, marginBottom: 0, border: isRequest ? "1px solid #bfdbfe" : "1px solid #e2e8f0" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                <div>
-                  <span style={{ fontWeight: 700, fontSize: 14 }}>{no}기 복사기</span>
-                  <span style={{ marginLeft: 6, fontSize: 11, background: isRequest ? "#dbeafe" : "#f1f5f9", color: isRequest ? "#1e40af" : "#64748b", borderRadius: 6, padding: "2px 6px" }}>
-                    {isRequest ? "요청출력용" : "카운터전용"}
-                  </span>
-                </div>
-                {diff !== null && (
-                  <span style={{ background: isRequest ? "#dbeafe" : "#f0fdf4", color: isRequest ? "#1e40af" : "#059669", borderRadius: 8, padding: "3px 10px", fontSize: 12, fontWeight: 700 }}>
-                    사용 {diff.toLocaleString()}
-                  </span>
-                )}
-              </div>
-
-              {/* 전일/시작 카운터 */}
-              <div style={{ display: "flex", gap: 6, marginBottom: 10, alignItems: "center" }}>
-                <div style={{ flex: 1, textAlign: "center" }}>
-                  <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 2 }}>전일 카운터</div>
-                  <div style={{ fontWeight: 700, color: "#374151", background: "#f1f5f9", borderRadius: 8, padding: "6px", fontSize: 13 }}>
-                    {p ? p.counter_value.toLocaleString() : "미입력"}
-                  </div>
-                </div>
-                <div style={{ color: "#94a3b8" }}>→</div>
-                <div style={{ flex: 1, textAlign: "center" }}>
-                  <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 2 }}>오늘 입력값</div>
-                  <div style={{ fontWeight: 700, color: c ? "#059669" : "#94a3b8", background: c ? "#f0fdf4" : "#f1f5f9", borderRadius: 8, padding: "6px", fontSize: 13 }}>
-                    {c ? c.counter_value.toLocaleString() : "미입력"}
-                  </div>
-                </div>
-              </div>
-
-              {/* 입력 */}
-              <div style={{ display: "flex", gap: 6 }}>
-                <input type="number" style={{ ...C.input, flex: 1 }} value={inputs[no]}
-                  onChange={e => setInputs(prev => ({ ...prev, [no]: e.target.value }))}
-                  placeholder="퇴근 카운터 입력" />
-                <button style={{ ...C.btn(saving === no ? "#94a3b8" : "#1e40af"), whiteSpace: "nowrap" }}
-                  onClick={() => handleSave(no)} disabled={saving === no}>
-                  {saving === no ? "저장중" : "저장"}
-                </button>
-              </div>
-
-              {/* 예상 사용량 미리보기 */}
-              {previewDiff !== null && (
-                <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
-                  <div style={{ flex: 1, background: "#f0fdf4", borderRadius: 8, padding: "6px", textAlign: "center" }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: "#059669" }}>{previewDiff.toLocaleString()}</div>
-                    <div style={{ fontSize: 10, color: "#6b7280" }}>예상 사용량</div>
-                  </div>
-                  {isRequest && totalExpectedCounter > 0 && (
-                    <div style={{ flex: 1, background: previewDiff - totalExpectedCounter > 0 ? "#fee2e2" : "#f0fdf4", borderRadius: 8, padding: "6px", textAlign: "center" }}>
-                      <div style={{ fontSize: 14, fontWeight: 700, color: previewDiff - totalExpectedCounter > 0 ? "#dc2626" : "#059669" }}>
-                        {(previewDiff - totalExpectedCounter).toLocaleString()}
-                      </div>
-                      <div style={{ fontSize: 10, color: "#6b7280" }}>파본 추정</div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+        </>
+      )}
     </>
   );
 }
@@ -958,6 +1128,21 @@ export default function App() {
     await supabase.from("copier_counters").upsert({ machine_no: machineNo, record_date: date, counter_value: value }, { onConflict: "machine_no,record_date" });
     await loadCopierCounters();
   };
+  const saveAllCopierCounters = async (date, inputs, startInputs, memoInputs) => {
+    const rows = [1, 2, 3, 4, 5]
+      .filter(no => inputs[no] !== "")
+      .map(no => ({
+        machine_no: no,
+        record_date: date,
+        counter_value: Number(inputs[no]),
+        start_counter: startInputs && startInputs[no] !== "" ? Number(startInputs[no]) : null,
+        memo: memoInputs && memoInputs[no] ? memoInputs[no] : null,
+      }));
+    if (rows.length > 0) {
+      await supabase.from("copier_counters").upsert(rows, { onConflict: "machine_no,record_date" });
+      await loadCopierCounters();
+    }
+  };
 
   const handleSave = async () => {
     if (!form.teacherId || !form.title || !form.requestDate) { alert("선생님, 제목, 신청일시는 필수입니다."); return; }
@@ -1032,7 +1217,7 @@ export default function App() {
       <div style={C.body}>
         {view === "dashboard" && <Dashboard requests={requests} teachers={teachers} selYear={selYear} setSelYear={setSelYear} teacherSearch={teacherSearch} setTeacherSearch={setTeacherSearch} onTeacherClick={(id) => { setFilterTeacher(id); setFilterSubject("전체"); setView("list"); }} />}
         {view === "list" && <ListView requests={requests} teachers={teachers} alerts={alerts} filterTeacher={filterTeacher} setFilterTeacher={setFilterTeacher} filterSubject={filterSubject} setFilterSubject={setFilterSubject} search={search} setSearch={setSearch} togglePrinted={togglePrinted} deleteReq={deleteReq} setForm={setForm} setEditId={setEditId} setView={setView} />}
-        {view === "daily" && <DailyStatsTab requests={requests} copierCounters={copierCounters} onSaveCounter={saveCopierCounter} />}
+        {view === "daily" && <DailyStatsTab requests={requests} copierCounters={copierCounters} onSaveCounter={saveCopierCounter} onSaveAllCounters={saveAllCopierCounters} />}
         {view === "form" && <FormView teachers={teachers} form={form} setForm={setForm} editId={editId} onSave={handleSave} allRequests={requests} onCancel={() => { setView("list"); setEditId(null); setForm(emptyForm()); }} />}
         {view === "admin" && role === "admin" && <AdminView teachers={teachers} requests={requests} addTeacher={addTeacher} updateTeacher={updateTeacher} deleteTeacher={deleteTeacher} bulkAddTeachers={bulkAddTeachers} bulkDeleteRequests={bulkDeleteRequests} setView={setView} />}
       </div>
